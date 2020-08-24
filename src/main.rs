@@ -5,7 +5,7 @@ use std::io::prelude::*;
 use std::path;
 use std::str;
 
-use cargo::core::dependency::Kind;
+use cargo::core::dependency::DepKind;
 use cargo::core::package::PackageSet;
 use cargo::core::{Package, Resolve, Workspace};
 use cargo::ops;
@@ -53,24 +53,34 @@ struct Args {
     #[structopt(short = "Z", value_name = "FLAG")]
     /// Unstable (nightly-only) flags to Cargo
     unstable_flags: Vec<String>,
+    #[structopt(long = "config")]
+    config_args: Option<Vec<String>>,
 }
 
-fn main() -> Result<(), Error> {
+fn main() -> anyhow::Result<()> {
     let mut config = Config::default()?;
     let Opts::Bom(args) = Opts::from_args();
-    real_main(&mut config, args)
+
+    if let Err(err) = real_main(&mut config, args) {
+        let mut shell = cargo::core::shell::Shell::new();
+
+        cargo::exit_with_error(err.into(), &mut shell)
+    }
+
+    Ok(())
 }
 
-fn real_main(config: &mut Config, args: Args) -> Result<(), Error> {
+fn real_main(config: &mut Config, args: Args) -> anyhow::Result<()> {
     config.configure(
         args.verbose,
-        args.quiet,
-        &args.color,
+        args.quiet.unwrap_or_default(),
+        args.color.as_deref(),
         args.frozen,
         args.locked,
         args.offline,
         &args.target_dir,
         &args.unstable_flags,
+        &args.config_args.unwrap_or_default(),
     )?;
 
     let manifest = args
@@ -151,8 +161,8 @@ fn top_level_dependencies(
         for dependency in member.dependencies() {
             // Filter out Build and Development dependencies
             match dependency.kind() {
-                Kind::Normal => (),
-                Kind::Build | Kind::Development => continue,
+                DepKind::Normal => (),
+                DepKind::Build | DepKind::Development => continue,
             }
             if let Some(dep) = package_ids
                 .package_ids()
@@ -253,25 +263,4 @@ impl<'a> fmt::Display for Licenses<'a> {
             }
         }
     }
-}
-
-#[derive(Debug)]
-struct Error;
-
-impl From<failure::Error> for Error {
-    fn from(err: failure::Error) -> Self {
-        cargo_exit(err)
-    }
-}
-
-impl From<io::Error> for Error {
-    fn from(err: io::Error) -> Self {
-        let failure = failure::Error::from_boxed_compat(Box::new(err));
-        cargo_exit(failure)
-    }
-}
-
-fn cargo_exit<E: Into<cargo::CliError>>(err: E) -> ! {
-    let mut shell = cargo::core::shell::Shell::new();
-    cargo::exit_with_error(err.into(), &mut shell)
 }
